@@ -322,8 +322,10 @@
   // 0. 설정 — localStorage 우선, 없으면 빈 값(=데모 모드)
   // ============================================================
   const CONFIG = {
-    SUPABASE_URL:     localStorage.getItem("ea_sb_url")   || "",
-    SUPABASE_ANON_KEY:localStorage.getItem("ea_sb_key")   || "",
+    // Supabase URL·anon key는 클라이언트 공개용(RLS로 보호)이라 기본값으로 박아둠.
+    // 설정창에서 입력하면 localStorage 값이 우선 적용된다.
+    SUPABASE_URL:     localStorage.getItem("ea_sb_url")   || "https://gxmisamxkgnphkzrwfsd.supabase.co",
+    SUPABASE_ANON_KEY:localStorage.getItem("ea_sb_key")   || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd4bWlzYW14a2ducGhrenJ3ZnNkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxNjExNDcsImV4cCI6MjA5NzczNzE0N30.2snYCJV2kvrvpJkgCmV_n38dD7KhIb4GQjFi1gBsCeg",
     GEMINI_API_KEY:   localStorage.getItem("ea_gemini")   || "",
     GEMINI_MODEL: "gemini-2.0-flash",
   };
