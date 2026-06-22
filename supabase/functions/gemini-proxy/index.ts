@@ -28,7 +28,7 @@ Deno.serve(async (req) => {
     const { parts, json: wantJson, model } = await req.json();
     if (!Array.isArray(parts)) return json({ error: "parts 배열이 필요합니다." }, 400);
 
-    const m = model || "gemini-2.0-flash";
+    const m = model || "gemini-2.5-flash";
     const body: Record<string, unknown> = { contents: [{ role: "user", parts }] };
     if (wantJson) body.generationConfig = { responseMimeType: "application/json", temperature: 0.4 };
 

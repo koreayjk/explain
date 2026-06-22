@@ -121,7 +121,6 @@
     .overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; z-index:60; padding:24px; }
     .overlay.show { display:flex; }
     .modal { width:100%; max-width:420px; }
-    .badge-demo { position:fixed; top:8px; right:8px; z-index:40; background:var(--warn); color:#1a1a1a; font-size:11px; font-weight:700; padding:3px 8px; border-radius:999px; }
   </style>
 </head>
 <body>
@@ -147,10 +146,6 @@
           <button class="btn mt" id="loginBtn" onclick="App.login()">로그인</button>
           <button class="btn ghost mt" onclick="App.signup()">계정 만들기</button>
         </div>
-        <p class="muted center mt">
-          <a href="#" onclick="App.openSettings();return false" style="color:var(--text-dim)">⚙︎ API 키 설정</a>
-          · <span id="modeLabel">데모 모드</span>
-        </p>
       </div>
     </section>
 
@@ -292,24 +287,6 @@
     </div>
   </div>
 
-  <!-- 설정(키) 모달 -->
-  <div class="overlay" id="settingsOverlay">
-    <div class="card modal">
-      <div class="section-title" style="margin-top:0">API 키 설정</div>
-      <p class="muted">브라우저(localStorage)에만 저장되며 소스에 커밋되지 않습니다. 비워두면 데모 모드로 동작합니다.</p>
-      <label class="label">Supabase URL</label>
-      <input id="cfgSbUrl" class="input" placeholder="https://xxxx.supabase.co" />
-      <label class="label">Supabase anon key</label>
-      <input id="cfgSbKey" class="input" placeholder="eyJ..." />
-      <label class="label">Gemini API key</label>
-      <input id="cfgGemini" class="input" placeholder="AIza..." />
-      <div class="row mt">
-        <button class="btn secondary" onclick="App.closeSettings()">취소</button>
-        <button class="btn" onclick="App.saveSettings()">저장</button>
-      </div>
-    </div>
-  </div>
-
   <div class="toast" id="toast"></div>
 
   <!-- Supabase JS (키가 있을 때만 사용) -->
@@ -322,12 +299,12 @@
   // 0. 설정 — localStorage 우선, 없으면 빈 값(=데모 모드)
   // ============================================================
   const CONFIG = {
-    // Supabase URL·anon key는 클라이언트 공개용(RLS로 보호)이라 기본값으로 박아둠.
-    // 설정창에서 입력하면 localStorage 값이 우선 적용된다.
-    SUPABASE_URL:     localStorage.getItem("ea_sb_url")   || "https://gxmisamxkgnphkzrwfsd.supabase.co",
-    SUPABASE_ANON_KEY:localStorage.getItem("ea_sb_key")   || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd4bWlzYW14a2ducGhrenJ3ZnNkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxNjExNDcsImV4cCI6MjA5NzczNzE0N30.2snYCJV2kvrvpJkgCmV_n38dD7KhIb4GQjFi1gBsCeg",
-    GEMINI_API_KEY:   localStorage.getItem("ea_gemini")   || "",
-    GEMINI_MODEL: "gemini-2.0-flash",
+    // Supabase URL·anon key는 클라이언트 공개용(RLS로 보호)이라 코드에 둔다.
+    SUPABASE_URL:      "https://gxmisamxkgnphkzrwfsd.supabase.co",
+    SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd4bWlzYW14a2ducGhrenJ3ZnNkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxNjExNDcsImV4cCI6MjA5NzczNzE0N30.2snYCJV2kvrvpJkgCmV_n38dD7KhIb4GQjFi1gBsCeg",
+    // Gemini 키는 코드에 두지 않는다. 호출은 Edge Function 프록시(gemini-proxy)가 서버에서 처리.
+    GEMINI_API_KEY:    "",
+    GEMINI_MODEL: "gemini-2.5-flash",  // 2.0-flash는 무료 할당량 0이라 2.5-flash 사용
   };
   const hasSupabase = () => !!(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY && window.supabase);
   // AI 사용 가능 조건: 직접 키가 있거나, Edge Function 프록시(Supabase)가 있으면 OK
@@ -769,23 +746,6 @@
         <div class="meta">설명 ${s.sessions}회</div></div>
         <span class="pill ${s.lei>=75?'green':s.lei&&s.lei<60?'red':''}">LEI ${s.lei||'–'}</span></div>`).join("");
     },
-
-    // ---------- 설정(키) ----------
-    openSettings(){ $("cfgSbUrl").value=CONFIG.SUPABASE_URL; $("cfgSbKey").value=CONFIG.SUPABASE_ANON_KEY; $("cfgGemini").value=CONFIG.GEMINI_API_KEY; $("settingsOverlay").classList.add("show"); },
-    closeSettings(){ $("settingsOverlay").classList.remove("show"); },
-    saveSettings(){
-      localStorage.setItem("ea_sb_url",  $("cfgSbUrl").value.trim());
-      localStorage.setItem("ea_sb_key",  $("cfgSbKey").value.trim());
-      localStorage.setItem("ea_gemini",  $("cfgGemini").value.trim());
-      toast("저장됐어요. 새로고침 후 적용됩니다.");
-      setTimeout(()=>location.reload(), 900);
-    },
-
-    refreshModeLabel(){
-      const parts=[]; parts.push(hasSupabase()?"Supabase ✓":"Supabase ✗"); parts.push(hasGemini()?"Gemini ✓":"Gemini ✗");
-      $("modeLabel").textContent = (hasSupabase()&&hasGemini())?"실연동 모드":"데모 모드 · "+parts.join(" / ");
-      if (!hasSupabase() || !hasGemini()){ const b=document.createElement("div"); b.className="badge-demo"; b.textContent="DEMO"; document.body.appendChild(b); }
-    },
   };
 
   // ============================================================
@@ -793,7 +753,6 @@
   // ============================================================
   document.querySelectorAll("#roleToggle button").forEach(btn=>btn.addEventListener("click",()=>App.setRole(btn.dataset.role)));
   $("transcript").addEventListener("input", e=>{ state.transcriptText=e.target.value; $("submitAnswerBtn").disabled=!e.target.value.trim(); });
-  App.refreshModeLabel();
 
   // 기존 세션 복원 (실연동 모드)
   (async ()=>{
