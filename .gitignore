@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Claude Code 로컬 설정 / 설치된 스킬 (앱 코드 아님)
+.claude/
+.agents/
+
+# Supabase CLI 임시 파일
+supabase/.temp/
+supabase/.branches/
+
+# 의존성
+node_modules/
