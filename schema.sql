@@ -9,17 +9,29 @@ create table if not exists public.classes (
   id          uuid primary key default gen_random_uuid(),
   name        text not null,
   teacher_id  uuid,            -- → profiles(id) (아래 ALTER에서 연결)
+  join_code   text unique,     -- 학생이 반에 참여할 때 입력하는 코드
   created_at  timestamptz not null default now()
 );
+-- 기존 테이블에 join_code가 없으면 추가
+alter table public.classes add column if not exists join_code text;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'classes_join_code_key') then
+    alter table public.classes add constraint classes_join_code_key unique (join_code);
+  end if;
+end $$;
 
--- 2) 프로필 (학생/교사 구분) -------------------------------------------------
+-- 2) 프로필 (역할: 학생/교사/학부모/원장) ------------------------------------
 create table if not exists public.profiles (
   id          uuid primary key references auth.users(id) on delete cascade,
-  role        text not null default 'student' check (role in ('student','teacher')),
+  role        text not null default 'student',
   name        text,
   class_id    uuid references public.classes(id),
   created_at  timestamptz not null default now()
 );
+-- 역할 4종으로 확장 (기존 제약 갱신)
+alter table public.profiles drop constraint if exists profiles_role_check;
+alter table public.profiles add constraint profiles_role_check
+  check (role in ('student','teacher','parent','admin'));
 
 -- classes.teacher_id → profiles(id) 연결 (이제 profiles 존재) -----------------
 alter table public.classes drop constraint if exists classes_teacher_fk;
@@ -32,9 +44,8 @@ create table if not exists public.sessions (
   id                 uuid primary key default gen_random_uuid(),
   student_id         uuid not null references public.profiles(id) on delete cascade,
   topic              text not null,
-  -- LEI 5개 하위 지표 (0~100)
   coverage           int,   -- 개념 포함도
-  accuracy           int,   -- 설명 정확도 (오개념 여부)
+  accuracy           int,   -- 설명 정확도
   speed              int,   -- 응답 속도
   extension          int,   -- 설명 확장성
   question_response  int,   -- 질문 대응력
@@ -49,16 +60,16 @@ create table if not exists public.turns (
   id                uuid primary key default gen_random_uuid(),
   session_id        uuid not null references public.sessions(id) on delete cascade,
   turn_no           int not null,
-  transcript        text,                  -- STT 결과
-  present_concepts  jsonb default '[]',    -- 포함된 핵심개념
-  missing_concepts  jsonb default '[]',    -- 누락된 핵심개념
-  misconceptions    jsonb default '[]',    -- 탐지된 오개념
-  ai_question       text,                  -- AI 소크라테스 질문
-  response_ms       int,                   -- 응답 지연(생각 시간) ms
+  transcript        text,
+  present_concepts  jsonb default '[]',
+  missing_concepts  jsonb default '[]',
+  misconceptions    jsonb default '[]',
+  ai_question       text,
+  response_ms       int,
   created_at        timestamptz not null default now()
 );
 
--- 5) 이의 제기 (오탐 완충장치 — 리스크분석 권고 #2) -------------------------
+-- 5) 이의 제기 (오탐 완충장치) ----------------------------------------------
 create table if not exists public.disputes (
   id          uuid primary key default gen_random_uuid(),
   turn_id     uuid references public.turns(id) on delete cascade,
@@ -68,7 +79,31 @@ create table if not exists public.disputes (
 );
 
 -- ============================================================
--- RLS (Row Level Security) — 학생은 본인 데이터만, 교사는 학급 데이터 열람
+-- 헬퍼 함수 (RLS에서 재귀 없이 권한 판정 — SECURITY DEFINER)
+-- ============================================================
+-- 교사가 해당 학생을 담당하는가? (내 반에 속한 학생인가)
+create or replace function public.teacher_owns_student(stu uuid)
+returns boolean language sql security definer stable as $$
+  select exists (
+    select 1 from public.profiles p
+    join public.classes c on c.id = p.class_id
+    where p.id = stu and c.teacher_id = auth.uid()
+  );
+$$;
+
+-- 학생이 코드로 반에 참여 (RLS 우회하여 본인 class_id 설정)
+create or replace function public.join_class(p_code text)
+returns text language plpgsql security definer as $$
+declare c record;
+begin
+  select id, name into c from public.classes where join_code = upper(trim(p_code));
+  if not found then raise exception '존재하지 않는 반 코드입니다.'; end if;
+  update public.profiles set class_id = c.id where id = auth.uid();
+  return c.name;
+end; $$;
+
+-- ============================================================
+-- RLS — 학생은 본인 / 교사는 담당 반 / 모두 격리
 -- ============================================================
 alter table public.profiles  enable row level security;
 alter table public.classes   enable row level security;
@@ -76,30 +111,47 @@ alter table public.sessions  enable row level security;
 alter table public.turns     enable row level security;
 alter table public.disputes  enable row level security;
 
--- 프로필: 본인 것 읽기/생성/수정
+-- 프로필: 본인 읽기/생성/수정 + 교사는 담당 반 학생 읽기
 drop policy if exists "own profile read"   on public.profiles;
 drop policy if exists "own profile write"  on public.profiles;
 drop policy if exists "own profile update" on public.profiles;
+drop policy if exists "teacher read students" on public.profiles;
 create policy "own profile read"   on public.profiles for select using (auth.uid() = id);
 create policy "own profile write"  on public.profiles for insert with check (auth.uid() = id);
 create policy "own profile update" on public.profiles for update using (auth.uid() = id);
+create policy "teacher read students" on public.profiles
+  for select using (public.teacher_owns_student(id));
 
--- 세션: 학생 본인 전체 권한 + 교사는 읽기
+-- 반: 교사는 본인 반 전체 권한 + 본인이 속한 반 읽기(학생이 반 이름 확인)
+drop policy if exists "teacher own classes" on public.classes;
+drop policy if exists "read own class"      on public.classes;
+create policy "teacher own classes" on public.classes
+  for all using (teacher_id = auth.uid()) with check (teacher_id = auth.uid());
+create policy "read own class" on public.classes
+  for select using (
+    id in (select class_id from public.profiles where id = auth.uid())
+  );
+
+-- 세션: 학생 본인 전체 권한 + 교사는 담당 반 학생 읽기
 drop policy if exists "student own sessions"        on public.sessions;
 drop policy if exists "teacher read class sessions" on public.sessions;
 create policy "student own sessions" on public.sessions
   for all using (auth.uid() = student_id) with check (auth.uid() = student_id);
 create policy "teacher read class sessions" on public.sessions
-  for select using (
-    exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'teacher')
-  );
+  for select using (public.teacher_owns_student(student_id));
 
--- 턴: 세션 소유자 기준
-drop policy if exists "turns by owner" on public.turns;
+-- 턴: 세션 소유자 + 교사는 담당 반 학생 읽기
+drop policy if exists "turns by owner"        on public.turns;
+drop policy if exists "teacher read turns"    on public.turns;
 create policy "turns by owner" on public.turns
   for all using (
     exists (select 1 from public.sessions s
             where s.id = turns.session_id and s.student_id = auth.uid())
+  );
+create policy "teacher read turns" on public.turns
+  for select using (
+    exists (select 1 from public.sessions s
+            where s.id = turns.session_id and public.teacher_owns_student(s.student_id))
   );
 
 -- 이의 제기: 본인 것

@@ -167,6 +167,14 @@
             <div class="stat"><div class="big" id="homeBest">–</div><div class="cap">최고 LEI</div></div>
           </div>
         </div>
+        <div class="card" id="classCard">
+          <div class="section-title" style="margin-top:0">우리 반</div>
+          <p class="muted" id="classStatus">반에 참여하면 선생님이 학습을 봐줄 수 있어요.</p>
+          <div id="classJoinRow" class="row mt">
+            <input id="classCodeInput" class="input" style="margin-top:0;text-transform:uppercase" placeholder="반 코드 (예: AB12CD)" />
+            <button class="btn small" onclick="App.joinClass()">참여</button>
+          </div>
+        </div>
         <div class="card">
           <div class="section-title" style="margin-top:0">오늘의 주제</div>
           <p class="muted" id="homeTopic">주제를 불러오는 중…</p>
@@ -267,8 +275,31 @@
           <div class="stat"><div class="big" id="dashRetention">–</div><div class="cap">설명 지속률(7일)</div></div>
           <div class="stat"><div class="big" id="dashDisputes">0</div><div class="cap">이의 제기</div></div>
         </div>
+        <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+          <span>내 반</span>
+          <button class="btn small" style="width:auto" onclick="App.createClass()">+ 반 만들기</button>
+        </div>
+        <div id="classList"><p class="muted">반을 만들고 코드를 학생에게 공유하세요.</p></div>
+
         <div class="section-title">학생별 현황</div>
         <div id="studentList"><p class="muted">학생 데이터가 여기에 표시됩니다.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================== 6. 학생 상세 (교사용) ===================== -->
+    <section id="screen-student" class="screen">
+      <div class="topbar">
+        <button class="btn ghost small" onclick="App.go('dashboard')">← 대시보드</button>
+        <div class="center"><h1 style="font-size:16px" id="stuName">학생</h1><div class="sub" id="stuClass">반</div></div>
+        <span class="pill" id="stuAvg">LEI –</span>
+      </div>
+      <div class="content">
+        <div class="card">
+          <div class="section-title" style="margin-top:0">LEI 추이 (최근 세션)</div>
+          <div id="stuTrend" class="concept-chips"><p class="muted">기록 없음</p></div>
+        </div>
+        <div class="section-title">설명 기록</div>
+        <div id="stuSessions"><p class="muted">아직 학습 기록이 없습니다.</p></div>
       </div>
     </section>
 
@@ -509,6 +540,9 @@
       $("homeUserName").textContent = (state.profile?.name||"학생")+"님";
       $("homeDate").textContent = new Date().toLocaleDateString("ko-KR",{month:"long",day:"numeric"});
 
+      // 우리 반 상태
+      this.renderClassCard();
+
       // 주제 셀렉트 채우기
       const sel=$("topicSelect");
       sel.innerHTML = Object.keys(CONCEPT_DB).map(k=>`<option value="${k}">${CONCEPT_DB[k].subject} · ${k}</option>`).join("");
@@ -542,6 +576,31 @@
       let streak=0, d=new Date();
       while (days.has(d.toDateString())){ streak++; d.setDate(d.getDate()-1); }
       return streak;
+    },
+
+    // ---------- 반 참여 (학생) ----------
+    async renderClassCard(){
+      const status=$("classStatus"), joinRow=$("classJoinRow");
+      if (!hasSupabase() || !state.profile?.class_id){
+        status.textContent = "아직 반에 참여하지 않았어요. 선생님께 받은 코드를 입력하세요.";
+        joinRow.style.display="flex"; return;
+      }
+      const { data:cls } = await sb.from("classes").select("name").eq("id",state.profile.class_id).single();
+      status.textContent = cls ? `참여 중인 반: ${cls.name}` : "반 정보를 불러올 수 없어요.";
+      joinRow.style.display = cls ? "none" : "flex";
+    },
+
+    async joinClass(){
+      const code = $("classCodeInput").value.trim();
+      if (!code) return toast("반 코드를 입력하세요.");
+      if (!hasSupabase()) return toast("데모 모드에서는 반 참여가 동작하지 않아요.");
+      const { data, error } = await sb.rpc("join_class", { p_code: code });
+      if (error) return toast("참여 실패: "+error.message);
+      // 프로필 갱신
+      const { data:prof } = await sb.from("profiles").select("*").eq("id",state.user.id).single();
+      state.profile = prof;
+      toast(`'${data}' 반에 참여했어요!`);
+      this.renderClassCard();
     },
 
     // ---------- 학습 ----------
@@ -727,24 +786,98 @@
 
     // ---------- 교사 대시보드 ----------
     async loadDashboard(){
-      let students=[];
-      if (hasSupabase()){
-        const { data:profs } = await sb.from("profiles").select("id,name").eq("role","student");
-        const { data:sessions } = await sb.from("sessions").select("student_id,lei,created_at");
-        const byStu={};
-        (sessions||[]).forEach(s=>{ (byStu[s.student_id]=byStu[s.student_id]||[]).push(s); });
-        students = (profs||[]).map(p=>{ const ss=byStu[p.id]||[]; return { name:p.name||"학생", lei: ss.length?Math.round(avg(ss.map(x=>x.lei))):0, sessions:ss.length }; });
-      } else {
-        students=[ {name:"김민준",lei:84,sessions:3}, {name:"이서연",lei:72,sessions:2}, {name:"박지호",lei:65,sessions:1} ];
+      if (!hasSupabase()){
+        // 데모 데이터
+        state.classes = [{ id:"d-cls", name:"데모반 A", join_code:"DEMO01" }];
+        state.students = [
+          { id:"d1", name:"김민준", class_id:"d-cls", lei:84, sessions:3, last:new Date().toISOString() },
+          { id:"d2", name:"이서연", class_id:"d-cls", lei:72, sessions:2, last:new Date().toISOString() },
+          { id:"d3", name:"박지호", class_id:"d-cls", lei:65, sessions:1, last:new Date(Date.now()-10*864e5).toISOString() },
+        ];
+        this.renderDashboard();
+        return;
       }
+      const uid = state.user.id;
+      const { data:classes } = await sb.from("classes").select("*").eq("teacher_id",uid).order("created_at");
+      state.classes = classes||[];
+      const classIds = state.classes.map(c=>c.id);
+      let students=[];
+      if (classIds.length){
+        const { data:profs } = await sb.from("profiles").select("id,name,class_id").eq("role","student").in("class_id",classIds);
+        const { data:sessions } = await sb.from("sessions").select("student_id,lei,created_at");
+        const byStu={}; (sessions||[]).forEach(s=>{ (byStu[s.student_id]=byStu[s.student_id]||[]).push(s); });
+        students = (profs||[]).map(p=>{ const ss=(byStu[p.id]||[]).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
+          return { id:p.id, name:p.name||"학생", class_id:p.class_id, lei: ss.length?Math.round(avg(ss.map(x=>x.lei))):0, sessions:ss.length, last: ss[0]?.created_at }; });
+      }
+      state.students = students;
+      this.renderDashboard();
+    },
+
+    renderDashboard(){
+      const students = state.students||[], classes = state.classes||[];
+      // 통계
       $("dashStudents").textContent = students.length;
       const active = students.filter(s=>s.lei>0);
       $("dashAvgLEI").textContent = active.length?Math.round(avg(active.map(s=>s.lei))):"–";
-      $("dashRetention").textContent = students.length?Math.round(active.length/students.length*100)+"%":"–";
-      $("studentList").innerHTML = students.map(s=>`
-        <div class="student-row"><div><div class="name">${s.name}</div>
-        <div class="meta">설명 ${s.sessions}회</div></div>
-        <span class="pill ${s.lei>=75?'green':s.lei&&s.lei<60?'red':''}">LEI ${s.lei||'–'}</span></div>`).join("");
+      const wk = Date.now()-7*864e5;
+      const recent = students.filter(s=>s.last && new Date(s.last).getTime()>wk).length;
+      $("dashRetention").textContent = students.length?Math.round(recent/students.length*100)+"%":"–";
+      // 반 목록
+      const cnt={}; students.forEach(s=>{ cnt[s.class_id]=(cnt[s.class_id]||0)+1; });
+      $("classList").innerHTML = classes.length ? classes.map(c=>`
+        <div class="student-row"><div><div class="name">${c.name}</div>
+        <div class="meta">코드 <b style="color:var(--primary)">${c.join_code}</b> · 학생 ${cnt[c.id]||0}명</div></div>
+        <button class="btn ghost small" onclick="App.copyCode('${c.join_code}')">코드 복사</button></div>`).join("")
+        : `<p class="muted">반을 만들고 코드를 학생에게 공유하세요.</p>`;
+      // 학생 목록
+      $("studentList").innerHTML = students.length ? students.map(s=>`
+        <div class="student-row" style="cursor:pointer" onclick="App.openStudent('${s.id}')">
+          <div><div class="name">${s.name}</div><div class="meta">설명 ${s.sessions}회</div></div>
+          <span class="pill ${s.lei>=75?'green':s.lei&&s.lei<60?'red':''}">LEI ${s.lei||'–'} ›</span></div>`).join("")
+        : `<p class="muted">아직 참여한 학생이 없어요. 위 반 코드를 학생에게 알려주세요.</p>`;
+    },
+
+    copyCode(code){ (navigator.clipboard?.writeText(code)||Promise.reject()).then(()=>toast("코드 복사됨: "+code)).catch(()=>toast("반 코드: "+code)); },
+
+    genCode(){ const c="ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s=""; for(let i=0;i<6;i++) s+=c[Math.floor(Math.random()*c.length)]; return s; },
+
+    async createClass(){
+      const name = prompt("반 이름을 입력하세요 (예: 중2-1반)");
+      if (!name || !name.trim()) return;
+      if (!hasSupabase()) return toast("데모 모드에서는 반 생성이 동작하지 않아요.");
+      const code = this.genCode();
+      const { error } = await sb.from("classes").insert({ name:name.trim(), teacher_id:state.user.id, join_code:code });
+      if (error) return toast("반 생성 실패: "+error.message);
+      toast(`'${name.trim()}' 반 생성! 코드 ${code}`);
+      this.loadDashboard();
+    },
+
+    // ---------- 학생 상세 (교사용) ----------
+    async openStudent(id){
+      const stu = (state.students||[]).find(s=>s.id===id);
+      if (!stu) return;
+      $("stuName").textContent = stu.name;
+      $("stuAvg").textContent = "LEI "+(stu.lei||"–");
+      const cls = (state.classes||[]).find(c=>c.id===stu.class_id);
+      $("stuClass").textContent = cls?cls.name:"";
+      $("stuTrend").innerHTML = `<p class="muted">불러오는 중…</p>`;
+      $("stuSessions").innerHTML = "";
+      this.go("student");
+
+      let sessions=[];
+      if (hasSupabase()){
+        const { data } = await sb.from("sessions").select("*").eq("student_id",id).order("created_at",{ascending:false});
+        sessions = data||[];
+      }
+      const trend = sessions.slice(0,8).reverse();
+      $("stuTrend").innerHTML = trend.length
+        ? trend.map(s=>`<span class="chip ${s.lei>=75?'has':s.lei<60?'bad':'miss'}">${s.lei}</span>`).join("")
+        : `<p class="muted">기록 없음</p>`;
+      $("stuSessions").innerHTML = sessions.length ? sessions.map(s=>`
+        <div class="student-row"><div><div class="name">${s.topic}</div>
+        <div class="meta">${new Date(s.created_at).toLocaleDateString("ko-KR")}${s.feedback?" · "+s.feedback.slice(0,36)+"…":""}</div></div>
+        <span class="pill ${s.lei>=75?'green':s.lei&&s.lei<60?'red':''}">LEI ${s.lei}</span></div>`).join("")
+        : `<p class="muted">아직 학습 기록이 없습니다.</p>`;
     },
   };
 
